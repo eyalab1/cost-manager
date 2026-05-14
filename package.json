@@ -1,0 +1,29 @@
+{
+  "name": "cost-manager",
+  "version": "1.0.0",
+  "description": "Final project - Async Server Side Development",
+  "main": "index.js",
+  "scripts": {
+    "start:users": "node user-service/server.js",
+    "start:about": "node about-service/server.js",
+    "dev:users": "nodemon user-service/server.js",
+    "dev:about": "nodemon about-service/server.js",
+    "test": "jest --runInBand",
+    "test:users": "jest user-service --runInBand",
+    "test:about": "jest about-service --runInBand"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mongoose": "^8.9.5"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "mongodb-memory-server": "^10.1.3",
+    "nodemon": "^3.1.9",
+    "supertest": "^7.0.0"
+  }
+}
