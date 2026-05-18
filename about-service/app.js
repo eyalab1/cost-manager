@@ -1,24 +1,38 @@
 const express = require('express');
+const { requestLogger } = require('../middleware/requestLogger');
 
 // Create one Express app that tests can import directly.
 const app = express();
 
+// Log every endpoint access through Pino and MongoDB.
+app.use(requestLogger);
+
 // Fallback names keep the endpoint useful without environment configuration.
-const defaultTeamMembers = ['Alice', 'Bob', 'Charlie'];
+const defaultTeamMembers = [
+  { first_name: 'Ofek', last_name: '' },
+  { first_name: 'Eyal', last_name: '' },
+  { first_name: 'Guy', last_name: '' },
+];
 
 /**
  * Normalizes one configured team member name.
  * @param {string} member - The raw comma-separated team member value.
- * @returns {string} The trimmed team member name.
+ * @returns {Object} The normalized team member object.
  */
-function trimTeamMember(member) {
-  // Remove spaces around names from environment configuration.
-  return member.trim();
+function parseTeamMember(member) {
+  // Split optional first-name/last-name pairs from environment configuration.
+  const nameParts = member.trim().split(/\s+/).filter(Boolean);
+
+  // Preserve the required object shape even when only a first name is given.
+  return {
+    first_name: nameParts[0] || '',
+    last_name: nameParts.slice(1).join(' '),
+  };
 }
 
 /**
  * Gets configured team member names from the environment.
- * @returns {string[]} The configured or fallback team member names.
+ * @returns {Object[]} The configured or fallback team member names.
  */
 function getTeamMembers() {
   // Missing configuration uses the hardcoded project fallback.
@@ -28,8 +42,8 @@ function getTeamMembers() {
 
   // Split comma-separated values and remove accidental whitespace.
   const members = process.env.TEAM_MEMBERS.split(',')
-    .map(trimTeamMember)
-    .filter(Boolean);
+    .map(parseTeamMember)
+    .filter((member) => member.first_name !== '');
 
   // Empty comma-only configuration should still return useful data.
   return members.length > 0 ? members : defaultTeamMembers;
@@ -43,7 +57,7 @@ function getTeamMembers() {
  */
 function aboutHandler(req, res) {
   // Return the team list using the API response contract.
-  return res.json({ team: getTeamMembers() });
+  return res.json(getTeamMembers());
 }
 
 // Register the about service endpoint.

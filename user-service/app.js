@@ -1,5 +1,6 @@
 const express = require('express');
 const mongoose = require('mongoose');
+const { requestLogger } = require('../middleware/requestLogger');
 const User = require('./models/User');
 
 // Create one Express app that can be imported by tests without opening a port.
@@ -7,6 +8,9 @@ const app = express();
 
 // Parse JSON request bodies at the HTTP boundary.
 app.use(express.json());
+
+// Log every endpoint access through Pino and MongoDB.
+app.use(requestLogger);
 
 /**
  * Checks whether a required request value is missing.
@@ -25,14 +29,19 @@ function isMissing(value) {
  */
 function validateUserPayload(body) {
   // Keep required field names aligned with the public API contract.
-  const requiredFields = ['first_name', 'last_name', 'birthday', 'marital_status'];
+  const requiredFields = ['id', 'first_name', 'last_name', 'birthday'];
 
   // Collect every missing field in one pass over the required names.
   const missingFields = requiredFields.filter((field) => isMissing(body[field]));
 
   // Return all missing fields so clients can fix the request once.
   if (missingFields.length > 0) {
-    return `${missingFields.join(', ')} required`;
+    return `Missing required field: ${missingFields[0]}`;
+  }
+
+  // Parse and validate the public numeric id at the HTTP boundary.
+  if (!Number.isInteger(Number(body.id))) {
+    return 'id must be a number';
   }
 
   // Parse dates explicitly at the system boundary.
@@ -55,13 +64,28 @@ function validateUserPayload(body) {
 async function createUser(body) {
   // Only persist fields that belong to the user schema.
   const user = await User.create({
+    id: Number(body.id),
     first_name: body.first_name,
     last_name: body.last_name,
     birthday: body.birthday,
-    marital_status: body.marital_status,
   });
 
   return user;
+}
+
+/**
+ * Converts a user document to the public API shape.
+ * @param {Object} user - The Mongoose user document.
+ * @returns {Object} The user fields exposed by the API.
+ */
+function toPublicUser(user) {
+  // Do not expose MongoDB _id or internal Mongoose fields in API responses.
+  return {
+    id: user.id,
+    first_name: user.first_name,
+    last_name: user.last_name,
+    birthday: user.birthday,
+  };
 }
 
 /**
@@ -75,18 +99,34 @@ async function addUserHandler(req, res) {
   const validationError = validateUserPayload(req.body);
 
   if (validationError) {
-    return res.status(400).json({ error: validationError });
+    return res.status(400).json({ id: 400, message: validationError });
   }
 
   try {
     // Delegate persistence to a focused database helper.
     const user = await createUser(req.body);
 
-    return res.status(201).json(user);
+    return res.status(201).json(toPublicUser(user));
   } catch (error) {
     // Mongoose validation errors are returned as client errors.
-    return res.status(400).json({ error: error.message });
+    return res.status(400).json({ id: 400, message: error.message });
   }
+}
+
+/**
+ * Calculates a user's total cost from the costs collection.
+ * @param {number} userId - The public numeric user id.
+ * @returns {Promise<number>} The summed cost total for the user.
+ */
+async function getUserTotal(userId) {
+  // Aggregate directly from the required costs collection.
+  const totals = await mongoose.connection.collection('costs').aggregate([
+    { $match: { $or: [{ user_id: userId }, { id: userId }] } },
+    { $group: { _id: null, total: { $sum: '$cost' } } },
+  ]).toArray();
+
+  // Missing cost rows mean the user currently has a zero total.
+  return totals.length > 0 ? totals[0].total : 0;
 }
 
 /**
@@ -96,35 +136,44 @@ async function addUserHandler(req, res) {
  * @returns {Promise<Object>} The Express JSON response.
  */
 async function getUsersHandler(req, res) {
-  // Sort by creation time for stable API responses.
-  const users = await User.find().sort({ createdAt: 1 });
+  // Sort by public id for stable API responses without timestamp fields.
+  const users = await User.find().sort({ id: 1 });
 
-  return res.json(users);
+  // Return only the fields defined by the project user contract.
+  return res.json(users.map(toPublicUser));
 }
 
 /**
- * Handles requests for one user and their current expense total.
+ * Handles requests for one user and their current cost total.
  * @param {Object} req - The Express request object.
  * @param {Object} res - The Express response object.
  * @returns {Promise<Object>} The Express JSON response.
  */
 async function getUserByIdHandler(req, res) {
-  // Validate MongoDB identifiers before querying the database.
-  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-    return res.status(400).json({ error: 'invalid user id' });
+  // Parse the API id as a number, not as MongoDB _id.
+  const userId = Number(req.params.id);
+
+  // Reject non-numeric route parameters before querying MongoDB.
+  if (!Number.isInteger(userId)) {
+    return res.status(400).json({ id: 400, message: 'invalid user id' });
   }
 
-  // Fetch the requested user document by its unique identifier.
-  const user = await User.findById(req.params.id);
+  // Fetch the requested user document by its public numeric id.
+  const user = await User.findOne({ id: userId });
 
   if (!user) {
-    return res.status(404).json({ error: 'user not found' });
+    return res.status(404).json({ id: 404, message: 'user not found' });
   }
 
-  // Expenses are not implemented yet, so the current total is zero.
+  // Compute the total from costs every time so the response stays current.
+  const total = await getUserTotal(userId);
+
+  // Return only the fields required by the project API contract.
   return res.json({
-    user,
-    total_expenses: 0,
+    first_name: user.first_name,
+    last_name: user.last_name,
+    id: user.id,
+    total,
   });
 }
 

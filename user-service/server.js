@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const mongoose = require('mongoose');
+const logger = require('../logger');
 const app = require('./app');
 
 // Read configuration from the environment with local defaults.
@@ -13,7 +14,7 @@ const mongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/cost-mana
  */
 function logUserServiceStarted() {
   // Log the bound port for local development.
-  console.log(`User service listening on port ${port}`);
+  logger.info({ port }, 'user service listening');
 }
 
 /**
@@ -28,7 +29,7 @@ async function start() {
     app.listen(port, logUserServiceStarted);
   } catch (error) {
     // Exit with a failure code when startup cannot complete.
-    console.error('Failed to start user service:', error.message);
+    logger.error({ error: error.message }, 'failed to start user service');
     process.exit(1);
   }
 }

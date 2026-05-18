@@ -13,10 +13,10 @@ const User = require('../models/User');
 function validUser(overrides = {}) {
     // Keep the default payload aligned with the public schema.
     return {
+        id: 123123,
         first_name: 'John',
         last_name: 'Doe',
         birthday: '1995-01-01',
-        marital_status: 'single',
         ...overrides,
     };
 }
@@ -31,6 +31,7 @@ async function requestWithoutRequiredField(requiredField) {
     const payload = validUser();
     delete payload[requiredField];
 
+    // Return the validation response for the caller's assertion.
     return request(app).post('/api/add').send(payload).expect(400);
 }
 
@@ -62,12 +63,14 @@ function registerUserServiceTests() {
     }
 
     /**
-     * Clears users after each test to keep cases isolated.
-     * @returns {Promise<void>} Resolves after the user collection is empty.
+     * Clears collections after each test to keep cases isolated.
+     * @returns {Promise<void>} Resolves after test collections are empty.
      */
-    async function clearUsers() {
+    async function clearDatabase() {
         // Remove test documents without dropping the database connection.
         await User.deleteMany({});
+        await mongoose.connection.collection('costs').deleteMany({});
+        await mongoose.connection.collection('logs').deleteMany({});
     }
 
     /**
@@ -81,12 +84,13 @@ function registerUserServiceTests() {
     }
 
     beforeAll(connectTestDatabase);
-    afterEach(clearUsers);
+    afterEach(clearDatabase);
     afterAll(disconnectTestDatabase);
 
     describe('POST /api/add', registerAddUserTests);
     describe('GET /api/users', registerGetUsersTests);
     describe('GET /api/users/:id', registerGetUserByIdTests);
+    describe('request logging', registerRequestLoggingTests);
 }
 
 /**
@@ -102,13 +106,23 @@ function registerAddUserTests() {
         // Send the minimum valid body accepted by the endpoint.
         const response = await request(app).post('/api/add').send(validUser()).expect(201);
 
-        expect(response.body).toMatchObject({
+        // The response should expose only the public user fields.
+        expect(response.body).toEqual({
+            id: 123123,
             first_name: 'John',
             last_name: 'Doe',
-            marital_status: 'single',
+            birthday: '1995-01-01T00:00:00.000Z',
         });
-        expect(response.body._id).toBeDefined();
-        expect(response.body.birthday).toBe('1995-01-01T00:00:00.000Z');
+    }
+
+    /**
+     * Verifies validation for a missing id.
+     * @returns {Promise<void>} Resolves after the assertion completes.
+     */
+    async function rejectsMissingId() {
+        // The error should name the missing field using the required shape.
+        const response = await requestWithoutRequiredField('id');
+        expect(response.body).toEqual({ id: 400, message: 'Missing required field: id' });
     }
 
     /**
@@ -116,9 +130,9 @@ function registerAddUserTests() {
      * @returns {Promise<void>} Resolves after the assertion completes.
      */
     async function rejectsMissingFirstName() {
-        // The error should name the missing field.
+        // The error should name the missing field using the required shape.
         const response = await requestWithoutRequiredField('first_name');
-        expect(response.body.error).toContain('first_name');
+        expect(response.body).toEqual({ id: 400, message: 'Missing required field: first_name' });
     }
 
     /**
@@ -126,9 +140,9 @@ function registerAddUserTests() {
      * @returns {Promise<void>} Resolves after the assertion completes.
      */
     async function rejectsMissingLastName() {
-        // The error should name the missing field.
+        // The error should name the missing field using the required shape.
         const response = await requestWithoutRequiredField('last_name');
-        expect(response.body.error).toContain('last_name');
+        expect(response.body).toEqual({ id: 400, message: 'Missing required field: last_name' });
     }
 
     /**
@@ -136,19 +150,23 @@ function registerAddUserTests() {
      * @returns {Promise<void>} Resolves after the assertion completes.
      */
     async function rejectsMissingBirthday() {
-        // The error should name the missing field.
+        // The error should name the missing field using the required shape.
         const response = await requestWithoutRequiredField('birthday');
-        expect(response.body.error).toContain('birthday');
+        expect(response.body).toEqual({ id: 400, message: 'Missing required field: birthday' });
     }
 
     /**
-     * Verifies validation for a missing marital status.
+     * Verifies validation for a non-numeric id.
      * @returns {Promise<void>} Resolves after the assertion completes.
      */
-    async function rejectsMissingMaritalStatus() {
-        // The error should name the missing field.
-        const response = await requestWithoutRequiredField('marital_status');
-        expect(response.body.error).toContain('marital_status');
+    async function rejectsInvalidId() {
+        // Numeric ids are required by the project API contract.
+        const response = await request(app)
+            .post('/api/add')
+            .send(validUser({ id: 'not-a-number' }))
+            .expect(400);
+
+        expect(response.body).toEqual({ id: 400, message: 'id must be a number' });
     }
 
     /**
@@ -162,14 +180,15 @@ function registerAddUserTests() {
             .send(validUser({ birthday: 'not-a-date' }))
             .expect(400);
 
-        expect(response.body.error).toBe('birthday must be a valid date');
+        expect(response.body).toEqual({ id: 400, message: 'birthday must be a valid date' });
     }
 
     test('creates a valid user', createsValidUser);
+    test('rejects missing id', rejectsMissingId);
     test('rejects missing first_name', rejectsMissingFirstName);
     test('rejects missing last_name', rejectsMissingLastName);
     test('rejects missing birthday', rejectsMissingBirthday);
-    test('rejects missing marital_status', rejectsMissingMaritalStatus);
+    test('rejects a non-numeric id', rejectsInvalidId);
     test('rejects an invalid birthday', rejectsInvalidBirthday);
 }
 
@@ -195,14 +214,16 @@ function registerGetUsersTests() {
     async function returnsCreatedUsers() {
         // Seed two users directly so this test focuses on the GET endpoint.
         await User.create([
-            validUser({ first_name: 'John' }),
-            validUser({ first_name: 'Jane', marital_status: 'married' }),
+            validUser({ id: 1, first_name: 'John' }),
+            validUser({ id: 2, first_name: 'Jane' }),
         ]);
 
         const response = await request(app).get('/api/users').expect(200);
 
+        // Both persisted users should be returned in a stable shape.
         expect(response.body).toHaveLength(2);
         expect(response.body.map(getFirstName).sort()).toEqual(['Jane', 'John']);
+        expect(response.body[0]._id).toBeUndefined();
     }
 
     test('returns an empty array when no users exist', returnsEmptyUsersArray);
@@ -215,48 +236,89 @@ function registerGetUsersTests() {
  */
 function registerGetUserByIdTests() {
     /**
-     * Verifies a found user response includes total expenses.
+     * Verifies a found user response includes computed total.
      * @returns {Promise<void>} Resolves after the assertion completes.
      */
-    async function returnsSpecificUserWithExpenses() {
-        // Seed one user so the lookup has a known target.
-        const user = await User.create(validUser({ first_name: 'Jane' }));
+    async function returnsSpecificUserWithTotal() {
+        // Seed one user and two costs for the numeric id lookup.
+        await User.create(validUser({ id: 123123, first_name: 'Jane' }));
+        await mongoose.connection.collection('costs').insertMany([
+            { user_id: 123123, cost: 100 },
+            { user_id: 123123, cost: 145 },
+            { user_id: 777777, cost: 999 },
+        ]);
 
-        const response = await request(app).get(`/api/users/${user._id}`).expect(200);
+        const response = await request(app).get('/api/users/123123').expect(200);
 
-        expect(response.body.user).toMatchObject({
-            _id: user._id.toString(),
+        // The endpoint contract is a flat user object with total.
+        expect(response.body).toEqual({
             first_name: 'Jane',
             last_name: 'Doe',
+            id: 123123,
+            total: 245,
         });
-        expect(response.body.total_expenses).toBe(0);
     }
 
     /**
-     * Verifies malformed MongoDB identifiers are rejected.
+     * Verifies users without costs receive a zero total.
      * @returns {Promise<void>} Resolves after the assertion completes.
      */
-    async function rejectsInvalidMongoId() {
-        // Invalid identifiers should fail before a database lookup.
-        const response = await request(app).get('/api/users/not-an-id').expect(400);
-        expect(response.body.error).toBe('invalid user id');
+    async function returnsZeroWhenNoCostsExist() {
+        // Seed one user without any cost rows.
+        await User.create(validUser({ id: 555555, first_name: 'NoCost' }));
+
+        const response = await request(app).get('/api/users/555555').expect(200);
+
+        // Missing cost rows should not break the user response.
+        expect(response.body.total).toBe(0);
     }
 
     /**
-     * Verifies valid but unknown MongoDB identifiers return not found.
+     * Verifies malformed numeric identifiers are rejected.
+     * @returns {Promise<void>} Resolves after the assertion completes.
+     */
+    async function rejectsInvalidNumericId() {
+        // Invalid identifiers should fail before a database lookup.
+        const response = await request(app).get('/api/users/not-an-id').expect(400);
+        expect(response.body).toEqual({ id: 400, message: 'invalid user id' });
+    }
+
+    /**
+     * Verifies unknown numeric identifiers return not found.
      * @returns {Promise<void>} Resolves after the assertion completes.
      */
     async function rejectsUnknownUserId() {
-        // Generate a valid identifier that is not stored in the database.
-        const unknownId = new mongoose.Types.ObjectId();
-
-        const response = await request(app).get(`/api/users/${unknownId}`).expect(404);
-        expect(response.body.error).toBe('user not found');
+        // Query an id that is not stored in the database.
+        const response = await request(app).get('/api/users/999999').expect(404);
+        expect(response.body).toEqual({ id: 404, message: 'user not found' });
     }
 
-    test('returns a specific user with total expenses', returnsSpecificUserWithExpenses);
-    test('returns 400 for invalid MongoDB id format', rejectsInvalidMongoId);
-    test('returns 404 for a valid but unknown user id', rejectsUnknownUserId);
+    test('returns a specific user with computed total', returnsSpecificUserWithTotal);
+    test('returns zero total when no costs exist', returnsZeroWhenNoCostsExist);
+    test('returns 400 for invalid numeric id format', rejectsInvalidNumericId);
+    test('returns 404 for an unknown user id', rejectsUnknownUserId);
+}
+
+/**
+ * Registers tests for MongoDB request logging.
+ * @returns {void}
+ */
+function registerRequestLoggingTests() {
+    /**
+     * Verifies endpoint access is persisted to the logs collection.
+     * @returns {Promise<void>} Resolves after the assertion completes.
+     */
+    async function storesHttpRequestLog() {
+        // Trigger one endpoint request that should be logged after response finish.
+        await request(app).get('/api/users').expect(200);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        // Logs are stored in the required MongoDB logs collection.
+        const log = await mongoose.connection.collection('logs').findOne({ path: '/api/users' });
+        expect(log).toMatchObject({ method: 'GET', path: '/api/users', status: 200 });
+    }
+
+    test('stores each HTTP request in MongoDB logs', storesHttpRequestLog);
 }
 
 describe('User service endpoints', registerUserServiceTests);

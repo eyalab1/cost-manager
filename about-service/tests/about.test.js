@@ -33,10 +33,14 @@ function registerAboutTests() {
      */
     async function returnsConfiguredTeamMembers() {
         // Configure three names through the environment boundary.
-        process.env.TEAM_MEMBERS = 'Dana,Eli,Noa';
+        process.env.TEAM_MEMBERS = 'Dana Levi,Eli Cohen,Noa Amir';
 
         const response = await request(app).get('/api/about').expect(200);
-        expect(response.body).toEqual({ team: ['Dana', 'Eli', 'Noa'] });
+        expect(response.body).toEqual([
+            { first_name: 'Dana', last_name: 'Levi' },
+            { first_name: 'Eli', last_name: 'Cohen' },
+            { first_name: 'Noa', last_name: 'Amir' },
+        ]);
     }
 
     /**
@@ -48,7 +52,11 @@ function registerAboutTests() {
         delete process.env.TEAM_MEMBERS;
 
         const response = await request(app).get('/api/about').expect(200);
-        expect(response.body).toEqual({ team: ['Alice', 'Bob', 'Charlie'] });
+        expect(response.body).toEqual([
+            { first_name: 'Ofek', last_name: '' },
+            { first_name: 'Eyal', last_name: '' },
+            { first_name: 'Guy', last_name: '' },
+        ]);
     }
 
     /**
@@ -57,10 +65,14 @@ function registerAboutTests() {
      */
     async function trimsTeamMemberNames() {
         // Include extra spaces to confirm request-independent normalization.
-        process.env.TEAM_MEMBERS = ' Dana, Eli , Noa ';
+        process.env.TEAM_MEMBERS = ' Dana Levi, Eli Cohen , Noa Amir ';
 
         const response = await request(app).get('/api/about').expect(200);
-        expect(response.body).toEqual({ team: ['Dana', 'Eli', 'Noa'] });
+        expect(response.body).toEqual([
+            { first_name: 'Dana', last_name: 'Levi' },
+            { first_name: 'Eli', last_name: 'Cohen' },
+            { first_name: 'Noa', last_name: 'Amir' },
+        ]);
     }
 
     test('returns team members from TEAM_MEMBERS', returnsConfiguredTeamMembers);
