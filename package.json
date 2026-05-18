@@ -6,11 +6,14 @@
   "scripts": {
     "start:users": "node user-service/server.js",
     "start:about": "node about-service/server.js",
+    "start:costs": "node cost-service/server.js",
     "dev:users": "nodemon user-service/server.js",
     "dev:about": "nodemon about-service/server.js",
+    "dev:costs": "nodemon cost-service/server.js",
     "test": "jest --runInBand",
     "test:users": "jest user-service --runInBand",
-    "test:about": "jest about-service --runInBand"
+    "test:about": "jest about-service --runInBand",
+    "test:costs": "jest cost-service --runInBand"
   },
   "keywords": [],
   "author": "",
@@ -18,7 +21,8 @@
   "dependencies": {
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "mongoose": "^8.9.5"
+    "mongoose": "^8.9.5",
+    "pino": "^9.5.0"
   },
   "devDependencies": {
     "jest": "^29.7.0",
